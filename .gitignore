@@ -1,0 +1,13 @@
+# dune build artifacts
+_build/
+*.install
+*.merlin
+*.merlin-exists
+.dune
+*.cmt
+*.cmti
+*.cmi
+*.cmx
+*.o
+*.a
+*.exe
