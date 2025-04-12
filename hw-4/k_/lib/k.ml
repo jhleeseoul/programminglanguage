@@ -96,7 +96,7 @@ module Env : ENV = struct
   let bind (E env) id loc = E (fun x -> if x = id then loc else env x)
 end
 
-(**  K- Interpreter *)
+(** K- Interpreter *)
 module type KMINUS = sig
   exception Error of string
 
@@ -226,8 +226,148 @@ module K : KMINUS = struct
         let v, mem' = eval mem env e in
         let l = lookup_env_loc env x in
         (v, Mem.store mem' l v)
-    | _ -> failwith "Unimplemented" (* TODO : Implement rest of the cases *)
+    | NUM n -> (Num n, mem)
+    | TRUE -> (Bool true, mem)
+    | FALSE -> (Bool false, mem)
+    | UNIT -> (Unit, mem)
+    | VAR x ->
+        let l = lookup_env_loc env x in
+        let v = Mem.load mem l in
+        (v, mem)
+    | ADD (e1, e2) ->
+        let v1, mem1 = eval mem env e1 in
+        let v2, mem2 = eval mem1 env e2 in
+        (Num (value_int v1 + value_int v2), mem2)
+    | SUB (e1, e2) ->
+        let v1, mem1 = eval mem env e1 in
+        let v2, mem2 = eval mem1 env e2 in
+        (Num (value_int v1 - value_int v2), mem2)
+    | MUL (e1, e2) ->
+        let v1, mem1 = eval mem env e1 in
+        let v2, mem2 = eval mem1 env e2 in
+        (Num (value_int v1 * value_int v2), mem2)
+    | DIV (e1, e2) ->
+        let v1, mem1 = eval mem env e1 in
+        let v2, mem2 = eval mem1 env e2 in
+        let n2 = value_int v2 in
+        if n2 = 0 then raise (Error "Division by zero")
+        else (Num (value_int v1 / n2), mem2)
+    | EQUAL (e1, e2) ->
+        let v1, mem1 = eval mem env e1 in
+        let v2, mem2 = eval mem1 env e2 in
+        (Bool (v1 = v2), mem2)
+    | LESS (e1, e2) ->
+        let v1, mem1 = eval mem env e1 in
+        let v2, mem2 = eval mem1 env e2 in
+        (Bool (value_int v1 < value_int v2), mem2)
+    | NOT e ->
+        let v, mem1 = eval mem env e in
+        (Bool (not (value_bool v)), mem1)
+    | SEQ (e1, e2) ->
+        let _, mem1 = eval mem env e1 in
+        eval mem1 env e2
+    | IF (e, e1, e2) ->
+        let v_cond, mem1 = eval mem env e in
+        if value_bool v_cond then eval mem1 env e1 else eval mem1 env e2
+    | WHILE (cond, body) ->
+        let rec loop mem =
+          let v_cond, mem1 = eval mem env cond in
+          if value_bool v_cond then
+            let _, mem2 = eval mem1 env body in
+            loop mem2
+          else (Unit, mem1)
+        in
+        loop mem
+    | LETF (f, params, fbody, cont) ->
+        (* 함수 정의를 환경에 바인딩하고 cont 실행 *)
+        let env' = Env.bind env f (Proc (params, fbody, env)) in
+        eval mem env' cont
+    | CALLV (f, args) ->
+        let params, fbody, fenv = lookup_env_proc env f in
+        if List.length params <> List.length args then
+          raise (Error "InvalidArg");
 
+        (* args는 호출 시점 env에서 평가 *)
+        let rec eval_args mem args =
+          match args with
+          | [] -> ([], mem)
+          | a :: rest ->
+              let v, mem1 = eval mem env a in
+              let vs, mem2 = eval_args mem1 rest in
+              (v :: vs, mem2)
+        in
+        let arg_values, mem1 = eval_args mem args in
+
+        (* 함수 정의 시점 env 기반으로 파라미터 바인딩, 메모리에 값도 저장 *)
+        let rec bind_params mem env params values =
+          match (params, values) with
+          | [], [] -> (mem, env)
+          | p :: ps, v :: vs ->
+              let l, mem1 = Mem.alloc mem in
+              let mem2 = Mem.store mem1 l v in
+              let env' = Env.bind env p (Addr l) in
+              bind_params mem2 env' ps vs
+          | _ -> raise (Error "Should not happen")
+        in
+
+        let mem2, env_args = bind_params mem1 fenv params arg_values in
+        (* 3단계: f 자신도 env에 다시 바인딩해서 재귀 가능하게 *)
+        let env_full = Env.bind env_args f (Proc (params, fbody, fenv)) in
+        (* 4단계: 본문 실행 *)
+        (* 주의: 메모리는 호출 시점에서 가져와야 한다 *)
+        (* 주의: fbody는 정의 시점 env에서 평가해야 한다 *)
+        eval mem2 env_full fbody
+    | CALLR (f, args) ->
+        let params, fbody, fenv = lookup_env_proc env f in
+        if List.length params <> List.length args then
+          raise (Error "InvalidArg");
+
+        (* 주의: 주소는 호출 위치 env에서 가져와야 한다 *)
+        let rec bind_refs callsite_env fenv params args =
+          match (params, args) with
+          | [], [] -> fenv
+          | p :: ps, a :: as_ ->
+              let l = lookup_env_loc callsite_env a in
+              let fenv' = Env.bind fenv p (Addr l) in
+              bind_refs callsite_env fenv' ps as_
+          | _ -> raise (Error "Should not happen")
+        in
+
+        let env_args = bind_refs env fenv params args in
+        let env_full = Env.bind env_args f (Proc (params, fbody, fenv)) in
+        eval mem env_full fbody
+    | RECORD fields ->
+        let rec eval_fields mem fields =
+          match fields with
+          | [] -> ([], mem)
+          | (id, e) :: rest ->
+              let v, mem1 = eval mem env e in
+              let l, mem2 = Mem.alloc mem1 in
+              let mem3 = Mem.store mem2 l v in
+              let rest_bindings, mem4 = eval_fields mem3 rest in
+              ((id, l) :: rest_bindings, mem4)
+        in
+        let bindings, mem' = eval_fields mem fields in
+        let lookup_field id =
+          try List.assoc id bindings
+          with Not_found -> raise (Error ("No such field: " ^ id))
+        in
+        (Record lookup_field, mem')
+    | FIELD (e, id) ->
+        let v, mem1 = eval mem env e in
+        let r = value_record v in
+        let l = r id in
+        let v' = Mem.load mem1 l in
+        (v', mem1)
+    | ASSIGNF (e1, id, e2) ->
+        let v_rec, mem1 = eval mem env e1 in
+        let r = value_record v_rec in
+        let l = r id in
+        let v_rhs, mem2 = eval mem1 env e2 in
+        let mem3 = Mem.store mem2 l v_rhs in
+        (v_rhs, mem3)
+
+  (* Other cases are omitted for brevity *)
   let run (mem, env, pgm) =
     let v, _ = eval mem env pgm in
     v
