@@ -157,6 +157,54 @@ let mem_limit = 128
 let loc_id = ref 0
 let reachable_locs : loc list ref = ref []
 
+
+(* GC implementation inspired by class material: conservative, safe memory reuse *)
+
+let rec collect_from_value v =
+  match v with
+  | L l -> [l]
+  | R lst -> List.map snd lst
+  | _ -> []
+
+let rec collect_from_svalue sv =
+  match sv with
+  | V v -> collect_from_value v
+  | M (_, Loc l) -> [l]
+  | P (_, _, e) -> collect_from_env e
+  | _ -> []
+
+and collect_from_env e =
+  List.flatten (
+    List.map (function
+      | (_, Loc l) -> [l]
+      | (_, Proc (_, _, env')) -> collect_from_env env'
+    ) e
+  )
+
+let rec collect_from_stack s =
+  List.flatten (List.map collect_from_svalue s)
+
+let rec collect_from_kont k =
+  List.flatten (List.map (fun (_, e') -> collect_from_env e') k)
+
+let malloc_with_gc s m e c k =
+  if List.length m < mem_limit then
+    let _ = loc_id := !loc_id + 1 in
+    ((!loc_id, 0), m)
+  else
+    let stack_locs = collect_from_stack s in
+    let env_locs = collect_from_env e in
+    let kont_locs = collect_from_kont k in
+    let live = stack_locs @ env_locs @ kont_locs in
+    reachable_locs := live;
+    let new_m = List.filter (fun (l, _) -> List.mem l !reachable_locs) m in
+    if List.length new_m < mem_limit then
+      let _ = loc_id := !loc_id + 1 in
+      let new_l = (!loc_id, 0) in
+      (new_l, new_m)
+    else raise GC_Failure
+
+
 (* TODO : Complete this function.
  * Implement the GC algorithm introduced in class material.
  *)

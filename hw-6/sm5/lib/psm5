@@ -1,0 +1,62 @@
+LETV(
+  "x",
+  NUM(
+    1
+  ),
+  WRITE(
+    ADD(
+      LETV(
+        "x",
+        NUM(
+          1
+        ),
+        SEQ(
+          ASSIGN(
+            "x",
+            NUM(
+              5
+            )
+          ),
+          MUL(
+            VAR(
+              "x"
+            ),
+            NUM(
+              3
+            )
+          )
+        )
+      ),
+      VAR(
+        "x"
+      )
+    )
+  )
+)
+
+[push 1;
+malloc;
+bind x;
+push x;
+store;
+push 1;
+malloc;
+bind x;
+push x;
+store;
+push 5;
+push x;
+store;
+pop;
+push x;
+load;
+push 3;
+mul;
+unbind;
+pop;
+push x;
+load;
+add;
+put;
+unbind;
+pop]
