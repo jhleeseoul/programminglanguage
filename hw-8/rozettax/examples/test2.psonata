@@ -21,7 +21,7 @@ push (a,
   load;
   unbind;
   pop]
-);
+  );
 bind f;
 push 1;
 malloc;
